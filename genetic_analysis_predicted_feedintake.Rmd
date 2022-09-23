@@ -1,0 +1,156 @@
+---
+title: "Predicted FI"
+author: "Ross Finnegan"
+date:  '`r format(Sys.time(), "%H:%M:%S on %d %B, %Y")`'
+output: 
+  html_document:
+    number_sections: TRUE
+    toc: TRUE
+    toc_float: TRUE
+---
+
+```{r setup, include=FALSE}
+options(width = 128)
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Setting up
+
+```{r results='hide'}
+library("asreml")
+source("qgm_helpers_t2.R")
+```
+
+# Reading phenotypic data and pedigree
+
+```{r}
+setwd('C:/Users/rossf/Downloads/')
+predAFI <- read.csv(file="full_df_with_preds_XGBPM.csv",header=TRUE,na.strings=c("NA"))
+head(predAFI)
+tail(predAFI)
+getwd()
+```
+```{r}
+ped <- read.csv(file= "ped_gen0to6.csv", header= TRUE, na.strings=c("NA"))
+head(ped)
+tail(ped)
+```
+
+# Preparing for the analysis
+```{r}
+predAFI$icowi <- predAFI$icow
+
+predAFI$sample_date_formatted <- as.Date(predAFI$sample_date, format =  "%d/%m/%Y %H:%M")
+predAFI$YEAR <- format(predAFI$sample_date_formatted, format="%Y")
+predAFI$MONTH <- format(predAFI$sample_date_formatted, format="%M")
+```
+## Declaring factors
+
+We need to define factors in the analysis.
+```{r}
+predAFI$GENETIC_GROUP <- factor(predAFI$GENETIC_GROUP)
+predAFI$FEED_TYPE <- factor(predAFI$FEED_TYPE)
+predAFI$icow <- factor(predAFI$icow) 
+predAFI$icowi <- factor(predAFI$icowi)
+predAFI$YEAR <- factor(predAFI$YEAR)
+predAFI$MONTH <- factor(predAFI$MONTH)
+
+# predAFI$idam <- factor(predAFI$idam)
+```
+
+## Distributional assumptions for random effect `id`
+
+The distributional assumptions for `id` will account for the relationships among all the individuals and will be distributed $MVN(0,V_a \mathbf{A})$ where $V_a$ is the additive genetic variance and $\mathbf{A}$ is Wright's Numerator Relationship Matrix.
+```{r}
+ainv <- ainverse(ped[,1:3]) 
+```
+
+```{r}
+setwd("C:/Users/rossf/Downloads")
+fullset <- read.csv(file="Fullset2.csv",header=TRUE,na.strings=c("NA"))
+
+```
+```{r}
+qgm_ped_summary(predAFI[,10:12])
+```
+
+
+
+# Fitting the Individual (Animal) Model
+## Running the model
+
+Ready to fit the Individual (Animal) Model in `asreml()` and estimate a variance component.
+
+ * The form has 4 elements: `fixed=`, `random=`, `residual=` and `data=`. 
+ * For the Individual (Animal) Model we need to specify that the random term is `id` and the covariance of the breeding values, i.e. the numerator relationship matrix, is specified using `vm(id,ainv)`.
+ * The residual term has been kept as `idv(units)`to be explicit that the covariance model of the residuals is the 'identity' matrix i.e. independent and identically distributed.
+
+
+```{r}
+## Basic Animal Model
+##predAFI1.asr <- asreml(fixed= Preds ~ 1 + GENETIC_GROUP + FEED_TYPE+ LACT_NO +  YEAR:MONTH, random= ~ vm(icow,ainv), residual= ~ idv(units), data=predAFI)
+
+## Animal Model with environmental effect modelled
+memory.limit(size = 2e+08)
+
+predAFI2.asr <- asreml(fixed= Preds ~ 1 + GENETIC_GROUP + FEED_TYPE + LACT_NO +  YEAR:MONTH, random= ~ vm(icow,ainv) +idv(icowi) , residual= ~ idv(units), data=predAFI)
+
+```
+
+## ... and looking at the output summary
+
+```{r}
+qgm_summary(predAFI1.asr)
+qgm_summary(predAF2.asr)
+```
+
+```{r}
+memory.limit(size = 2e+08)
+```
+
+## Estimates of Heritability
+
+Using `vpredict()` to estimate the phenotypic variance as the sum of the variance components i.e. $V_a + V_e$. 
+
+ 
+```{r}
+# phenotypic variance & heritability
+
+vpredict(predAFI1.asr, vp ~ V1+V2)
+vpredict(predAFI1.asr, h ~ V1/(V1+V2))
+
+vpredict(predAFI2.asr, vp ~ V1+V2+V3)
+vpredict(predAFI2.asr, h ~ V2/(V1+V2+V3))
+```
+ 
+# Looking at the EBVs
+
+## Extract and merge EBVs
+
+The estimates obtained from fitting an Individual (Animal) Model are the 'Expected Breeding Values' or 'Estimated Breeding Values', often denoted EBVs. 
+The EBVs can be extracted from the ASReml output using the `qgm_random_effects()` function. 
+
+```{r}
+ebv <- qgm_random_effects(predAFI.asr,"id")
+head(ebv)
+tail(ebv)
+nrow(ebv)
+```
+
+
+```{r}
+colnames(ebv)
+colnames(ebv)[1] <- "ebv"
+colnames(ebv)[2] <- "se"
+colnames(ebv)[4] <- "id" # rename ebv$levels as ebv$id to match with ped data frame ready for merging
+pedx <- merge(ped, ebv, by = "id")
+head(pedx)
+tail(pedx)
+```
+
+## EBVs in generation 9
+
+```{r}
+hist(pedx[pedx$generation %in% c(9),]$ebv,breaks=20)
+hist(pedx[pedx$generation %in% c(9),]$se,breaks=20)
+```
